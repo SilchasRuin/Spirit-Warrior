@@ -1,4 +1,5 @@
 ﻿using Dawnsbury.Core.CharacterBuilder.Feats;
+using Dawnsbury.Core.CombatActions;
 using Dawnsbury.Core.Mechanics;
 using Dawnsbury.Core.Mechanics.Enumerations;
 using Dawnsbury.Modding;
@@ -10,6 +11,7 @@ namespace Spirit_Warrior
         public static class Traits
         {
             public static readonly Trait SpiritWarriorArchetype = ModManager.RegisterTrait("SpiritWarrior", new TraitProperties("Spirit Warrior", true));
+            public static readonly Trait SpiritWarrior = ModManager.RegisterTrait("SpiritWarrior", new TraitProperties("Spirit Warrior", true));
         }
         public static class FeatNames
         {
@@ -28,7 +30,12 @@ namespace Spirit_Warrior
             internal static QEffectId OldPotency { get; } = ModManager.RegisterEnumMember<QEffectId>("Old Potency");
             internal static QEffectId OldStriking { get; } = ModManager.RegisterEnumMember<QEffectId>("Old Striking");
             internal static QEffectId OldProperty { get; } = ModManager.RegisterEnumMember<QEffectId>("Old Property");
+            internal static QEffectId Pulse { get; } = ModManager.RegisterEnumMember<QEffectId>("Pulse");
 
+        }
+        internal static class ActionIds
+        {
+            internal static readonly ActionId SwordLightWave = ModManager.RegisterEnumMember<ActionId>("SwordLightWave");
         }
     }
 }
