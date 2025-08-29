@@ -1,7 +1,9 @@
-﻿using Dawnsbury.Auxiliary;
+﻿using System.Buffers;
+using Dawnsbury.Auxiliary;
 using Dawnsbury.Core;
 using Dawnsbury.Core.CharacterBuilder.Feats;
 using Dawnsbury.Core.CharacterBuilder.FeatsDb.TrueFeatDb.Archetypes;
+using Dawnsbury.Core.CharacterBuilder.Selections.Options;
 using Dawnsbury.Core.CombatActions;
 using Dawnsbury.Core.Coroutines.Options;
 using Dawnsbury.Core.Mechanics;
@@ -25,7 +27,7 @@ namespace Spirit_Warrior
                     "The damage die for your fist changes to 1d6 instead of 1d4, and your fist gains the parry trait. You don’t take the normal –2 circumstance penalty when making a lethal attack with your fist or any other unarmed attacks. You gain the Overwhelming Combination action.")
                 .WithRulesBlockForCombatAction(cr =>
                 {
-                    CombatAction overwhelm =CombatAction.CreateSimple(cr, "Overwhelming Combination", Trait.Flourish).WithActionCost(1);
+                    CombatAction overwhelm = CombatAction.CreateSimple(cr, "Overwhelming Combination", Trait.Flourish).WithActionCost(1);
                         overwhelm.Description =
                             "{b}Requirements{/b} You're wielding a one-handed melee weapon or a melee weapon with the agile or finesse trait" +
                             "\n\nMake two Strikes against a target within your reach, one with the required weapon and one with your fist unarmed attack. If both hit the same target, combine their damage for the purposes of its resistances and weaknesses. Apply your multiple attack penalty to each Strike normally.";
@@ -39,14 +41,14 @@ namespace Spirit_Warrior
                     Id = QEffectId.PowerfulFist
                 });
             });
-            AddOverwhelmingCombination(spiritWarriorDedication);
+            SwHelpers.AlternateOcAction(spiritWarriorDedication);
             AddParryAction(spiritWarriorDedication);
             ModManager.AddFeat(spiritWarriorDedication);
             Feat unholyBane = new TrueFeat(
                     ModData.FeatNames.UnholyBane,
                     4,
-                    "You have sworn an oath to defend the helpless from dangerous unholy creatures, specifically the undead and demons that threaten the Points of Light.",
-                    "Attacks made as part of your Overwhelming Combination ability gain a +2 circumstance bonus to damage against undead and demons, or +4 if you have master proficiency with the weapon you used. You also gain a +2 circumstance bonus to saves against spells from demons and undead.",
+                    "You have sworn an oath to defend the helpless from dangerous unholy creatures, specifically the undead and fiends that threaten the Points of Light.",
+                    "Attacks made as part of your Overwhelming Combination ability gain a +2 circumstance bonus to damage against undead and fiends, or +4 if you have master proficiency with the weapon you used. You also gain a +2 circumstance bonus to saves against spells from fiends and undead.",
                     [ModData.Traits.SpiritWarrior, Trait.Homebrew])
                 .WithAvailableAsArchetypeFeat(ModData.Traits.SpiritWarriorArchetype)
                 .WithOnCreature(self =>
@@ -57,14 +59,14 @@ namespace Spirit_Warrior
                     });
                 }
                 )
-                .WithPermanentQEffect("Attacks made as part of your Overwhelming Combination ability gain a +2 circumstance bonus to damage against undead and demons, or +4 if you have master proficiency with the weapon you used. You also gain a +2 circumstance bonus to saves against spells from demons and undead.",
+                .WithPermanentQEffect("Attacks made as part of your Overwhelming Combination ability gain a +2 circumstance bonus to damage against undead and fiends, or +4 if you have master proficiency with the weapon you used. You also gain a +2 circumstance bonus to saves against spells from fiends and undead.",
                 qf =>
                 {
-                    qf.BonusToDefenses = (Func<QEffect, CombatAction?, Defense, Bonus?>)((_, action, defense) => action != null && action.HasTrait(Trait.Spell) && (defense.IsSavingThrow() ||
+                    qf.BonusToDefenses = (_, action, defense) => action != null && action.HasTrait(Trait.Spell) && (defense.IsSavingThrow() ||
                         (!action.Owner.HasTrait(Trait.Undead) &&
-                         !action.Owner.HasTrait(Trait.Demon)))
+                         !action.Owner.HasTrait(Trait.Fiend)))
                         ? new Bonus(2, BonusType.Circumstance, "Unholy Bane Oath")
-                        : (Bonus)null);
+                        : null;
                 });
             ModManager.AddFeat(unholyBane);
             Feat flowingPalm = new TrueFeat(
@@ -83,6 +85,14 @@ namespace Spirit_Warrior
                 }
                 );
             ModManager.AddFeat(flowingPalm);
+            Feat cuttingHeavenL = new(ModData.FeatNames.CuttingHeavenL, null,
+                    "At the start of combat, Cutting Heaven, Crushing Earth will be applied to your left hand weapon.",
+                    [], null);
+            ModManager.AddFeat(cuttingHeavenL);
+            Feat cuttingHeavenR = new(ModData.FeatNames.CuttingHeavenR, null,
+                    "At the start of combat, Cutting Heaven, Crushing Earth will be applied to your right hand weapon.",
+                    [], null);
+            ModManager.AddFeat(cuttingHeavenR);
             Feat cuttingHeaven = new TrueFeat(
                 ModData.FeatNames.CuttingHeaven,
                 6,
@@ -93,13 +103,21 @@ namespace Spirit_Warrior
                 "\n-When you successfully Strike an opponent with your fist unarmed attack, it is off-guard to the next Strike you make against it with a one-handed, agile, or finesse melee weapon before the end of your next turn.",
                 [ModData.Traits.SpiritWarrior])
                 .WithAvailableAsArchetypeFeat(ModData.Traits.SpiritWarriorArchetype)
-                .WithOnCreature(self => {self.AddQEffect(CrushingHeavenLogic.CuttingHeavenWeaponQEffect());})
-                .WithOnCreature(self => { self.AddQEffect(CrushingHeavenLogic.SwInvestedWeaponQEffect()); })
-                .WithPermanentQEffect("You apply runes from your handwraps to your weapon", qfFeat =>
+                .WithOnCreature(self =>
                 {
-                    qfFeat.Innate = false;
+                    self.AddQEffect(CrushingHeavenLogic.CuttingHeavenWeaponQEffect());
+                    self.AddQEffect(CrushingHeavenLogic.SwInvestedWeaponQEffect());
+                })
+                .WithOnSheet(values =>
+                {
+                    values.AddSelectionOption(new SingleFeatSelectionOption("PrecombatCuttingHeaven", "Cutting Heaven - Chosen Weapon", SelectionOption.PRECOMBAT_PREPARATIONS_LEVEL, feat => feat.FeatName == ModData.FeatNames.CuttingHeavenL || feat.FeatName == ModData.FeatNames.CuttingHeavenR).WithIsOptional());
+                })
+                .WithPermanentQEffect("You apply runes from your handwraps to a weapon.", qfFeat =>
+                {
+                    qfFeat.Name = "Cutting Heaven";
                     qfFeat.StartOfCombat = (Func<QEffect, Task>)(async innerSelf =>
-                    {
+                    { 
+                        if (!innerSelf.Owner.CarriedItems.Any(item => item.HasTrait(Trait.HandwrapsOfMightyBlows) && item.IsWorn)) return;
                         List<string> itemOptionsString = [];
                         List<Item?> itemOptions = [];
                         foreach (Item item in innerSelf.Owner.HeldItems.Where(SwHelpers.IsItemOcWeapon))
@@ -107,22 +125,35 @@ namespace Spirit_Warrior
                             itemOptionsString.Add(item.Name);
                             itemOptions.Add(item);
                         }
+
                         itemOptionsString.Add("none");
-                        ChoiceButtonOption chosenOption = await innerSelf.Owner.AskForChoiceAmongButtons(
-                            IllustrationName.QuestionMark,
-                            "Choose a weapon to apply your handwraps runes to.",
-                            itemOptionsString.ToArray()
-                            );
-                        if (itemOptionsString[chosenOption.Index] != "none")
+                        if (!innerSelf.Owner.HasFeat(ModData.FeatNames.CuttingHeavenL) && !innerSelf.Owner.HasFeat(ModData.FeatNames.CuttingHeavenR) && itemOptions.Count > 0)
                         {
-                            Item? targetItem = itemOptions[chosenOption.Index];
-                            if (targetItem != null) CaHelpers.ChooseWeaponStart(innerSelf.Owner, targetItem);
+                            ChoiceButtonOption chosenOption = await innerSelf.Owner.AskForChoiceAmongButtons(
+                                IllustrationName.QuestionMark,
+                                "Choose a weapon to apply your handwraps runes to.",
+                                itemOptionsString.ToArray()
+                            );
+                            if (itemOptionsString[chosenOption.Index] != "none")
+                            {
+                                Item? targetItem = itemOptions[chosenOption.Index];
+                                if (targetItem != null) CaHelpers.ChooseWeaponStart(innerSelf.Owner, targetItem);
+                            }
+                        }
+                        else if (innerSelf.Owner.HasFeat(ModData.FeatNames.CuttingHeavenL) && innerSelf.Owner.HeldItems.Count > 0)
+                        {
+                            CaHelpers.ChooseWeaponStart(innerSelf.Owner, innerSelf.Owner.HeldItems[0]);
+                        }
+                        else if (innerSelf.Owner.HasFeat(ModData.FeatNames.CuttingHeavenR) && innerSelf.Owner.HeldItems.Count > 1)
+                        {
+                            CaHelpers.ChooseWeaponStart(innerSelf.Owner, innerSelf.Owner.HeldItems[1]);
                         }
                     });
                 }
                 )
                 .WithPermanentQEffect("After weapon Strikes the target is debuffed against fist Strikes, and after fist Strikes the enemy is debuffed against weapon Strikes.", delegate (QEffect self)
                  {
+                     self.Name = "Crushing Earth";
                      self.AfterYouTakeActionAgainstTarget = (addingEffects, action, defender, result) =>
                      {
                          // If you hit with a weapon which is benefitting from your handwraps, you gain a buff to your Fist attack
@@ -209,14 +240,21 @@ namespace Spirit_Warrior
                     }
                     return null;
                 };
+                self.AfterYouTakeAction = (_, action) => 
+                {
+                    if (action.ActionId == ModData.ActionIds.OverwhelmingCombination && self.Owner.HasEffect(ModData.QEffectIds.Oath))
+                        self.Owner.RemoveAllQEffects(qf => qf.Id == ModData.QEffectIds.Oath);
+                    return Task.CompletedTask;
+                };
             });
         }
 
         private static void AddParryAction(Feat parryAction)
         {
-            parryAction.WithPermanentQEffect(null, delegate (QEffect self)
+            parryAction.WithPermanentQEffect("You raise your fist to parry oncoming attacks, granting yourself a +1 circumstance bonus to AC.", delegate (QEffect self)
             {
                 self.ProvideMainAction = parry => self.Owner.CanMakeBasicUnarmedAttack ? new ActionPossibility(SwHelpers.CreateParryAction(parry.Owner)) : null;
+                self.Name = "Parry (fist) {icon:Action}";
             });
         }
     }

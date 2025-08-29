@@ -1,7 +1,10 @@
-﻿using Dawnsbury.Core.Creatures;
+﻿using Dawnsbury.Core;
+using Dawnsbury.Core.CombatActions;
+using Dawnsbury.Core.Creatures;
 using Dawnsbury.Core.Mechanics;
 using Dawnsbury.Core.Mechanics.Enumerations;
 using Dawnsbury.Core.Mechanics.Rules;
+using Dawnsbury.Core.Mechanics.Targeting;
 using Dawnsbury.Core.Mechanics.Treasure;
 using Dawnsbury.Core.Possibilities;
 using Dawnsbury.Display.Illustrations;
@@ -28,20 +31,47 @@ namespace Spirit_Warrior
                     HandleRune(handwraps, weaponChoice, RuneKind.WeaponPotency);
                     HandleRune(handwraps, weaponChoice, RuneKind.WeaponStriking);
                     HandleRune(handwraps, weaponChoice, RuneKind.WeaponProperty);
-                    var dice = handwraps.WeaponProperties!.DamageDieCount;
-                    var bonus = handwraps.WeaponProperties.ItemBonus;
+                    int dice = handwraps.WeaponProperties!.DamageDieCount;
+                    int bonus = handwraps.WeaponProperties.ItemBonus;
                     if (dice <= 1 && bonus <= 0) return;
                     weaponChoice.WeaponProperties!.DamageDieCount =
                         Math.Max(weaponChoice.WeaponProperties.DamageDieCount, dice);
                     weaponChoice.WeaponProperties.ItemBonus =
                         Math.Max(weaponChoice.WeaponProperties.ItemBonus, bonus);
+                    if (handwraps.Runes.Any(rune => rune.RuneProperties is
+                            { RuneKind: RuneKind.WeaponProperty }))
+                    {
+                        foreach (Item rune in handwraps.Runes.Where(rune => rune.RuneProperties is
+                                     { RuneKind: RuneKind.WeaponProperty }))
+                        {
+                            weaponChoice.Name = $"{{Blue}}{rune.RuneProperties!.Prefix}{{/Blue}} " + weaponChoice.Name;
+                        }
+                    }
+                    if (dice > 1)
+                    {
+                        string? str3 = weaponChoice.WeaponProperties.DamageDieCount switch
+                        {
+                            2 => "striking",
+                            3 => "greater striking",
+                            4 => "major striking",
+                            _ => null
+                        };
+                        if (str3 != null) weaponChoice.Name = $"{{Blue}}{str3}{{/Blue}} {weaponChoice.Name}";
+                    }
+                    if (bonus > 0)
+                    {
+                        weaponChoice.Name = $"{{Blue}}+{weaponChoice.WeaponProperties.ItemBonus}{{/Blue}} " + weaponChoice.Name;
+                    }
                 }
             };
         }
         public static void ResetWeapons(Item attack)
         {
-            attack.Runes.RemoveAll(rune => rune.RuneProperties != null);
+            List<Trait> itemTraits = Items.TryGetItemTemplate(attack.ItemName, out Item? item) ? item.Traits : attack.Traits;
+            attack.Runes.RemoveAll(rune => rune.RuneProperties is {RuneKind: RuneKind.WeaponPotency or RuneKind.WeaponStriking or RuneKind.WeaponProperty});
             attack.WeaponProperties = GenerateDefaultWeaponProperties(attack);
+            attack.Traits = itemTraits;
+            attack.Name = attack.BaseHumanName;
         }
 
         internal static void HandleRune(Item handwraps, Item attack, RuneKind type)
@@ -56,15 +86,14 @@ namespace Spirit_Warrior
         }
         public static void HandleOldRune(Item oldRune, Item attack)
         {
-            Item propertyRune = oldRune;
-            attack.Runes.Add(propertyRune);
-            propertyRune.RuneProperties!.ModifyItem(attack);
+            attack.Runes.Add(oldRune);
+            oldRune.RuneProperties!.ModifyItem(attack);
         }
 
         private static WeaponProperties GenerateDefaultWeaponProperties(Item attack)
         {
-            Item baseItem = new Item(attack.Illustration, attack.Name, attack.Traits.ToArray()).WithWeaponProperties(new WeaponProperties($"1d{attack.WeaponProperties!.DamageDieSize}", attack.WeaponProperties.DamageKind));
-
+            List<Trait> itemTraits = Items.TryGetItemTemplate(attack.ItemName, out Item? item) ? item.Traits : attack.Traits;
+            Item baseItem = new Item(attack.Illustration, attack.BaseHumanName, itemTraits.ToArray()).WithWeaponProperties(new WeaponProperties($"1d{attack.WeaponProperties!.DamageDieSize}", attack.WeaponProperties.DamageKind));
             if (attack.WeaponProperties.RangeIncrement > 0)
             {
                 baseItem.WeaponProperties?.WithRangeIncrement(attack.WeaponProperties.RangeIncrement);
@@ -91,11 +120,11 @@ namespace Spirit_Warrior
                     // Determine options
                     List<Item?> itemOptions = [];
                     List<Item> weapons = self.Owner.HeldItems;
-                    if (weapons.Count >= 1 && weapons[0].HasTrait(Trait.Melee) && weapons[0].HasTrait(Trait.Finesse) | weapons[0].HasTrait(Trait.Agile) | !weapons[0].HasTrait(Trait.TwoHanded))
+                    if (weapons.Count >= 1 && SwHelpers.IsItemOcWeapon(weapons[0]))
                     {
                         itemOptions.Add(weapons[0]);
                     }
-                    if (weapons.Count == 2 && weapons[1].HasTrait(Trait.Melee) && weapons[1].HasTrait(Trait.Finesse) | weapons[1].HasTrait(Trait.Agile) | !weapons[1].HasTrait(Trait.TwoHanded))
+                    if (weapons.Count == 2 && SwHelpers.IsItemOcWeapon(weapons[1]))
                     {
                         itemOptions.Add(weapons[1]);
                     }
@@ -105,17 +134,21 @@ namespace Spirit_Warrior
                     }
                     SubmenuPossibility menu = new(new ModdedIllustration("TXAssets/Choice.png"), "Choose Weapon");
                     menu.Subsections.Add(new PossibilitySection("Choose Weapon"));
-
-                    foreach (Item? item in itemOptions)
+                    foreach (Item item in itemOptions.OfType<Item>())
                     {
-                        if (item != null)
-                            menu.Subsections[0].AddPossibility(
-                                (ActionPossibility)CaHelpers.ChooseWeapon(self.Owner, item)
-                            );
+                        menu.Subsections[0].AddPossibility(
+                            (ActionPossibility)CaHelpers.ChooseWeapon(self.Owner, item)
+                        );
                     }
-                    foreach (Possibility possibility1 in menu.Subsections[0].Possibilities)
+                    menu.Subsections[0].AddPossibility(new ActionPossibility(new CombatAction(self.Owner, IllustrationName.BadWeapon, "None", [Trait.Basic, Trait.DoesNotBreakStealth, Trait.DoNotShowOverheadOfActionName], "Ends the effect of Cutting Heaven, Crushing Earth on a weapon.", 
+                        Target.Self().WithAdditionalRestriction(a => a.HasEffect(ModData.QEffectIds.CrushingEarthWeapon) ? null : "Cutting Heaven, Crushing Earth is not currently being applied to a weapon.")
+                        ).WithActionCost(0).WithEffectOnSelf(creature =>
+                        {
+                            creature.RemoveAllQEffects(qf => qf.Id == ModData.QEffectIds.CrushingEarthWeapon);
+                        })
+                    ));
+                    foreach (ActionPossibility possibility in menu.Subsections[0].Possibilities.Cast<ActionPossibility>())
                     {
-                        ActionPossibility possibility = (ActionPossibility)possibility1;
                         possibility.PossibilitySize = PossibilitySize.Half;
                     }
                     menu.WithPossibilityGroup("Spirit Warrior");

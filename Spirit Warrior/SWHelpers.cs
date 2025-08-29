@@ -3,6 +3,7 @@ using Dawnsbury.Core;
 using Dawnsbury.Core.CharacterBuilder.Feats;
 using Dawnsbury.Core.CharacterBuilder.FeatsDb.Common;
 using Dawnsbury.Core.CombatActions;
+using Dawnsbury.Core.Coroutines;
 using Dawnsbury.Core.Coroutines.Options;
 using Dawnsbury.Core.Coroutines.Requests;
 using Dawnsbury.Core.Creatures;
@@ -11,7 +12,9 @@ using Dawnsbury.Core.Mechanics.Core;
 using Dawnsbury.Core.Mechanics.Enumerations;
 using Dawnsbury.Core.Mechanics.Rules;
 using Dawnsbury.Core.Mechanics.Targeting;
+using Dawnsbury.Core.Mechanics.Targeting.Targets;
 using Dawnsbury.Core.Mechanics.Treasure;
+using Dawnsbury.Core.Possibilities;
 using Dawnsbury.Display;
 using Dawnsbury.Display.Illustrations;
 
@@ -23,22 +26,25 @@ namespace Spirit_Warrior
         {
             CombatAction overwhelmingCombinationAction = new CombatAction(
                 owner,
-                new ModdedIllustration("TXAssets/OCAction.png"),
+                ModData.MIllustrations.OverwhelmingCombination,
                 "Overwhelming Combination",
                 [Trait.Flourish],
                 "Make two Strikes against a target within your reach, one with the required weapon and one with your fist unarmed attack. If both hit the same target, combine their damage for the purposes of its resistances and weaknesses. Apply your multiple attack penalty to each Strike normally.",
                 Target.Self().WithAdditionalRestriction(_ =>
                 {
-                    if (!owner.CanMakeBasicUnarmedAttack)
-                        return "You must be able to make a basic unarmed attack to use Overwhelming Combination.";
+                    Item? unarmed = owner.UnarmedStrike.HasTrait(Trait.Fist) ? owner.UnarmedStrike :
+                        owner.MeleeWeapons.FirstOrDefault(weapon => weapon.HasTrait(Trait.Fist));
+                    if (unarmed == null) return "You must be able to make an unarmed strike with your fist";
+                    CombatAction unarmedStrike = owner.CreateStrike(unarmed).WithActionCost(0);
+                    if (!unarmedStrike.CanBeginToUse(owner)) return "There's no enemy nearby or you cannot make an unarmed strike with your fist.";
                     if (owner.HeldItems.Count == 0 || (!IsItemOcWeapon(owner.HeldItems[0]) && !IsItemOcWeapon(owner.HeldItems[1])))
                         return "You must be wielding a proper weapon to use Overwhelming Combination.";
-                    return (owner.Weapons.Any(weapon => weapon.HasTrait(Trait.Fist) && CommonRulesConditions.CouldMakeStrike(owner, weapon)) ? null : "There is no nearby enemy or you can't make attacks.")!;
+                    return null;
                 }))
             {
                 ShortDescription = "Make two Strikes against a target within your reach."
             }
-            .WithActionCost(1)
+            .WithActionCost(1).WithActionId(ModData.ActionIds.OverwhelmingCombination)
             .WithEffectOnSelf(async (action, innerSelf) =>
              {
                  List<Creature>? chosenCreatures = [];
@@ -66,11 +72,8 @@ namespace Spirit_Warrior
                          }
                          else
                              chosenOption = possibilities[0];
-                         Item ocWeapon = IsItemOcWeapon(owner.HeldItems[0]) ? owner.HeldItems[0] : owner.HeldItems[1];
-                         QEffect oathBonus = new QEffect()
-                         {
-                             BonusToDamage = (Func<QEffect, CombatAction, Creature, Bonus>)((_, _, _) => new Bonus(innerSelf.Proficiencies.Get(ocWeapon.Traits) >= Proficiency.Master ? 4 : 2, BonusType.Circumstance, "Oath"))
-                         };
+                         // Item ocWeapon = IsItemOcWeapon(owner.HeldItems[0]) ? owner.HeldItems[0] : owner.HeldItems[1];
+                         QEffect oathBonus = OathBonus(innerSelf);
                              if (chosenOption is CreatureOption creatureOption2)
                              {
                                  if (hpBefore == -1)
@@ -81,6 +84,7 @@ namespace Spirit_Warrior
                              {
                                  action.RevertRequested = true;
                                  chosenCreatures = null;
+                                 innerSelf.RemoveAllQEffects(qf => qf.Id == ModData.QEffectIds.Oath);
                                  return;
                              }
                              if (chosenOption is CreatureOption chosenCreature)
@@ -103,16 +107,16 @@ namespace Spirit_Warrior
                          if (choice.Index != 3)
                          {
                              Item remainingWeapon;
-                             if (choice.Index == 0 || choice.Index == 2)
+                             if (choice.Index is 0 or 2)
                              {
-                                 Item weapon = (choice.Index == 0) ? ocWeapon : fist;
-                                 remainingWeapon = (choice.Index == 0) ? fist : ocWeapon;
+                                 Item weapon = choice.Index == 0 ? ocWeapon : fist;
+                                 remainingWeapon = choice.Index == 0 ? fist : ocWeapon;
                                  await HandleStrikes(weapon);
                                  await HandleStrikes(remainingWeapon);
                              }
                              if (choice.Index == 1)
                              {
-                                 Item weapon = (choice.Index == 1) ? ocWeapon2 : fist;
+                                 Item weapon = choice.Index == 1 ? ocWeapon2 : fist;
                                  remainingWeapon = fist;
                                  await HandleStrikes(weapon);
                                  await HandleStrikes(remainingWeapon);
@@ -129,8 +133,8 @@ namespace Spirit_Warrior
                          ChoiceButtonOption choice = await innerSelf.AskForChoiceAmongButtons(IllustrationName.QuestionMark, "Choose which Strike to use first.", ocWeapon.BaseItemName.HumanizeTitleCase2(), fist.BaseItemName.HumanizeTitleCase2(), "Cancel");
                          if (choice.Index != 2)
                          {
-                             Item weapon = (choice.Index == 0) ? ocWeapon : fist;
-                             Item remainingWeapon = (choice.Index == 0) ? fist : ocWeapon;
+                             Item weapon = choice.Index == 0 ? ocWeapon : fist;
+                             Item remainingWeapon = choice.Index == 0 ? fist : ocWeapon;
                              await HandleStrikes(weapon);
                              await HandleStrikes(remainingWeapon);
                          }
@@ -140,16 +144,17 @@ namespace Spirit_Warrior
                          }
                      }
                  }
+                 innerSelf.RemoveAllQEffects(qf => qf.Id == ModData.QEffectIds.Oath);
             });
             return overwhelmingCombinationAction;
         }
         public static bool IsItemOcWeapon(Item item)
         {
-            return (item.HasTrait(Trait.Finesse) || item.HasTrait(Trait.Agile) || !item.HasTrait(Trait.TwoHanded)) && !item.HasTrait(Trait.Ranged);
+            return (item.HasTrait(Trait.Finesse) || item.HasTrait(Trait.Agile) || !item.HasTrait(Trait.TwoHanded)) && !item.HasTrait(Trait.Ranged) && !item.HasTrait(Trait.Unarmed);
         }
         public static CombatAction CreateParryAction(Creature owner)
         {
-            CombatAction parryAction = new CombatAction(owner, new ModdedIllustration("TXAssets/FistParry.png"), "Parry Fist", [], "You raise your fist to parry oncoming attacks, granting yourself a +1 circumstance bonus to AC.", Target.Self())
+            CombatAction parryAction = new CombatAction(owner, new ModdedIllustration("TXAssets/FistParry.png"), "Parry (fist)", [Trait.Basic], "You raise your fist to parry oncoming attacks, granting yourself a +1 circumstance bonus to AC.", Target.Self())
                     .WithSoundEffect(SfxName.RaiseShield)
                     .WithActionCost(1)
                     .WithEffectOnSelf(you =>
@@ -173,55 +178,125 @@ namespace Spirit_Warrior
         private static bool OathAgainst(Creature spiritWarrior, Creature attacker)
         {
             QEffect? qEffect = spiritWarrior.FindQEffect(ModData.QEffectIds.UnholyBane);
-            return qEffect != null && attacker.Traits.Contains((Trait.Undead)) || attacker.Traits.Contains((Trait.Demon));
+            return qEffect != null && attacker.Traits.Contains(Trait.Undead) || attacker.Traits.Contains(Trait.Fiend);
         }
 
-        /*public static void AlternateOcAction(TrueFeat overwhelmingCombinationAction)
+        public static void AlternateOcAction(Feat overwhelmingCombinationAction)
         {
             overwhelmingCombinationAction.WithPermanentQEffect(
-                "Make two Strikes against a target within your reach, one with the required weapon and one with your fist unarmed attack. If both hit the same target, combine their damage for the purposes of its resistances and weaknesses. Apply your multiple attack penalty to each Strike normally.",
+                null,
                 qfInner =>
                 {
+                    qfInner.ProvideMainAction = effect => new ActionPossibility(CreateOverwhelmingCombinationAction(effect.Owner));
                     qfInner.ProvideStrikeModifier = item =>
                     {
-                        if (IsItemOcWeapon(item) != true && !item.HasTrait(Trait.Fist))
-                            return null;
                         if (IsItemOcWeapon(item))
                         {
-                            CombatAction ocAction = qfInner.Owner.CreateStrike(item,
-                                qfInner.Owner.Actions.AttackedThisManyTimesThisTurn);
+                            CombatAction ocAction = qfInner.Owner.CreateStrike(item);
+                            ocAction.Traits.Add(Trait.Flourish);
+                            ocAction.Traits.Add(Trait.Basic);
+                            ocAction.Name = "Overwhelming Combination";
                             ocAction.Description = StrikeRules.CreateBasicStrikeDescription4(
                                 ocAction.StrikeModifiers,
-                                additionalAttackRollText: "Make an attack with your fist after making this attack");
-                            ocAction.EffectOnOneTarget = async (innerAction, self, target, result) =>
+                                additionalAftertext: "Make an attack with your fist.");
+                            ocAction.WithActionId(ModData.ActionIds.OverwhelmingCombination);
+                            Creature owner = ocAction.Owner;
+                            Item? unarmed = owner.UnarmedStrike.HasTrait(Trait.Fist) ? owner.UnarmedStrike :
+                                owner.MeleeWeapons.FirstOrDefault(weapon => weapon.HasTrait(Trait.Fist));
+                            if (unarmed == null) return null;
+                            CombatAction unarmedStrike = owner.CreateStrike(unarmed).WithActionCost(0);
+                            ocAction.Target = (ocAction.Target as CreatureTarget)!.WithAdditionalConditionOnTargetCreature((
+                                creature, _) => unarmedStrike.CanBeginToUse(creature)
+                                ? Usability.Usable
+                                : Usability.NotUsable("You cannot make a strike with your fist."));
+                            ocAction.Illustration = new SideBySideIllustration(item.Illustration, IllustrationName.Fist);
+                            ocAction.EffectOnOneTarget = async (_, self, target, _) =>
                             {
-                                await innerAction.AllExecute();
-                                self.CreateStrike(self.UnarmedStrike.WithMainTrait(Trait.Fist), -1, null).WithActionCost(0);
+                                if (self.HasEffect(ModData.QEffectIds.UnholyBane))
+                                    self.AddQEffect(OathBonus(self));
+                                await self.MakeStrike(target, item);
+                                if (!unarmedStrike.CanBeginToUse(self))
+                                {
+                                    self.RemoveAllQEffects(qf => qf.Id == ModData.QEffectIds.Oath);
+                                    return;
+                                }
+                                await self.Battle.GameLoop.FullCast(unarmedStrike);
+                                self.RemoveAllQEffects(qf => qf.Id == ModData.QEffectIds.Oath);
                             };
                             return ocAction;
                         }
-
                         if (item.HasTrait(Trait.Fist))
                         {
-                            CombatAction ocAction = qfInner.Owner.CreateStrike(item,
-                                qfInner.Owner.Actions.AttackedThisManyTimesThisTurn);
+                            CombatAction ocAction = qfInner.Owner.CreateStrike(item);
+                            ocAction.Traits.Add(Trait.Flourish);
+                            ocAction.Traits.Add(Trait.Basic);
+                            ocAction.WithActionId(ModData.ActionIds.OverwhelmingCombination);
+                            ocAction.Name = "Overwhelming Combination";
                             ocAction.Description = StrikeRules.CreateBasicStrikeDescription4(
                                 ocAction.StrikeModifiers,
-                                additionalAttackRollText: "Make an attack with a qualifying weapon after this");
-                            ocAction.EffectOnOneTarget = async (innerAction, self, target, result) =>
+                                additionalAftertext: "Make an attack with a qualifying weapon.");
+                            ocAction.Target = (ocAction.Target as CreatureTarget)!.WithAdditionalConditionOnTargetCreature((
+                                creature, _) => creature.MeleeWeapons.Any(IsItemOcWeapon)
+                                ? Usability.Usable
+                                : Usability.NotUsable("You are not wielding an appropriate weapon."));
+                            ocAction.Illustration = ModData.MIllustrations.OverwhelmingCombination;
+                            ocAction.EffectOnOneTarget = async (_, self, target, _) =>
                             {
-                                foreach (Item weapon in self.HeldItems)
+                                if (self.HasEffect(ModData.QEffectIds.UnholyBane))
+                                    self.AddQEffect(OathBonus(self));
+                                await self.MakeStrike(target, item);
+                                List<Option> options = [];
+                                foreach (Item weapon in self.HeldItems.Where(IsItemOcWeapon))
                                 {
-                                    
+                                    CombatAction strike = self.CreateStrike(weapon);
+                                    GameLoop.AddDirectUsageOnCreatureOptions(strike, options);
                                 }
-                                await innerAction.AllExecute();
-                                self.CreateStrike(self.UnarmedStrike.WithMainTrait(Trait.Fist), -1, null).WithActionCost(0);
+                                Option? choice = null;
+                                switch (options.Count)
+                                {
+                                    case 0:
+                                        self.RemoveAllQEffects(qf => qf.Id == ModData.QEffectIds.Oath);
+                                        return;
+                                    case 1:
+                                        choice = options[0];
+                                        break;
+                                    case >= 2:
+                                        RequestResult result = await self.Battle.SendRequest(
+                                            new AdvancedRequest(self, "Choose a creature to strike.", options)
+                                            {
+                                                TopBarIcon = ModData.MIllustrations.OverwhelmingCombination
+                                            });
+                                        choice = result.ChosenOption;
+                                        break;
+                                }
+                                if (choice == null)
+                                {
+                                    self.RemoveAllQEffects(qf => qf.Id == ModData.QEffectIds.Oath);
+                                    return;
+                                }
+                                await choice.Action();
+                                self.RemoveAllQEffects(qf => qf.Id == ModData.QEffectIds.Oath);
                             };
+                            return ocAction;
                         }
-                        
+                        return null;
                     };
                 }
             );
-        }*/
+        }
+
+        public static QEffect OathBonus(Creature innerSelf)
+        {
+            return new QEffect
+            {
+                BonusToDamage = (_, action, _) =>
+                {
+                    if (action.ChosenTargets.ChosenCreature is not {} enemy || !enemy.HasTrait(Trait.Fiend) || !enemy.HasTrait(Trait.Undead) || action.Item == null) return null;
+                    return new Bonus(innerSelf.Proficiencies.Get(action.Item.Traits) >= Proficiency.Master ? 4 : 2,
+                        BonusType.Circumstance, "Oath");
+                },
+                Id = ModData.QEffectIds.Oath
+            };
+        }
     }
 }
